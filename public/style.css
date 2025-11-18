@@ -1,0 +1,208 @@
+* {
+  box-sizing: border-box;
+  font-family: "Consolas", "Courier New", monospace;
+}
+
+body {
+  margin: 0;
+  padding: 25px;
+  background: #000;
+  color: #19ff19;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+
+h2, h3 {
+  color: #19ff19;
+  text-shadow: 0 0 8px #19ff19;
+}
+
+.typewriter {
+  overflow: hidden;
+  border-right: 2px solid #19ff19;
+  white-space: nowrap;
+  width: 0;
+  animation: typing 2.5s steps(40, end) forwards, blink .8s step-end infinite;
+}
+
+@keyframes typing {
+  from { width: 0; }
+  to { width: 100%; }
+}
+
+@keyframes blink {
+  50% { border-color: transparent; }
+}
+
+
+.card {
+  width: 100%;
+  max-width: 700px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid #19ff19;
+  box-shadow: 0 0 25px #19ff19;
+  padding: 20px;
+  margin-bottom: 35px;
+}
+
+
+input, textarea {
+  width: 100%;
+  padding: 10px;
+  background: #000;
+  color: #19ff19;
+  border: 2px solid #19ff19;
+  outline: none;
+  margin-bottom: 10px;
+}
+
+input:focus, textarea:focus {
+  box-shadow: 0 0 12px #19ff19;
+}
+
+button {
+  padding: 10px 18px;
+  border: 2px solid #19ff19;
+  background: black;
+  color: #19ff19;
+  cursor: pointer;
+  transition: 0.2s;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+button:hover {
+  background: #19ff19;
+  color: black;
+  box-shadow: 0 0 20px #19ff19;
+}
+
+#results {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.item {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  border: 2px solid #19ff19;
+  box-shadow: 0 0 18px #19ff19;
+  padding: 15px;
+  margin-bottom: 25px; 
+}
+
+
+.item h3 {
+  margin: 0;
+  margin-bottom: 6px;
+  font-size: 1.2rem;
+  text-shadow: 0 0 6px #19ff19;
+}
+
+.item img,
+.item video {
+  display: block;
+  margin: 10px auto 0 auto;
+  max-width: 100%;
+  max-height: 420px;
+  border: 2px solid #19ff19;
+  box-shadow: 0 0 25px #19ff19;
+}
+
+
+.item .del {
+  display: block;
+  width: fit-content;
+  margin-top: 12px;
+  padding: 6px 12px;
+
+  background: black !important;
+  border: 2px solid #ff1919 !important;
+  color: #ff1919 !important;
+  text-shadow: 0 0 6px #ff1919;
+}
+
+
+.del:hover {
+  background: #ff1919 !important;
+  color: black !important;
+  box-shadow: 0 0 20px #ff1919;
+}
+
+.pagination {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.pagination button {
+  border: 2px solid #19ff19;
+}
+
+#fullscreenOverlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.9);
+  z-index: 9999;
+
+  overflow: hidden;
+}
+
+#fsContainer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+}
+
+#fsContainer:active {
+  cursor: grabbing;
+}
+
+#fsImage,
+#fsVideo {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  max-width: none;
+  max-height: none;
+  pointer-events: auto !important;
+}
+
+#fsContainer img, 
+#fsContainer video {
+  user-drag: none;
+  -webkit-user-drag: none;
+  user-select: none;
+  pointer-events: auto;
+}
+
+#fsCloseBtn {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  font-size: 32px;
+  color: white;
+  cursor: pointer;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 6px 14px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  transition: 0.2s;
+}
+
+#fsCloseBtn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
