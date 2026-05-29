@@ -2,41 +2,36 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Secret Media Vault</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div class="card" id="setup">
+    <div class="card" id="setup" style="display: none">
       <h2 class="typewriter">Set passcode (only the first time)</h2>
       <p>
         This unique passcode encrypts all your files. Remember it — it cannot be recovered.
       </p>
-      <input
-        id="secretSetup"
-        type="password"
-        placeholder="New secret passcode"
-      />
-      <button onclick="setPasscode()">Set passcode</button>
+      <input id="secretSetup" type="password" placeholder="New secret passcode" />
+      <button id="setBtn">Set passcode</button>
       <p id="setupStatus" class="status"></p>
     </div>
 
-    <div class="card" id="login">
+    <div class="card" id="login" style="display: none">
       <h2>Login</h2>
-      <p class="typewriter">
-        Enter the secret passcode to access the media.
-      </p>
+      <p class="typewriter">Enter the secret passcode to access the media.</p>
       <input id="secretLogin" type="password" placeholder="Passcode" />
-      <button onclick="login()">Enter</button>
+      <button id="loginBtn">Enter</button>
       <p id="loginStatus" class="status"></p>
     </div>
 
     <div class="card" id="app" style="display: none">
       <h2>Upload media</h2>
-      <input id="title" placeholder="Title" />
-      <textarea id="desc" placeholder="Description (optional)"></textarea>
-      <input id="tags" placeholder="tag1, tag2 (optional)" />
-      <input id="file" type="file" />
-      <button onclick="uploadFile()">Upload</button>
+      <input id="title" placeholder="Title" maxlength="200" />
+      <textarea id="desc" placeholder="Description (optional)" maxlength="7000"></textarea>
+      <input id="tags" placeholder="tag1, tag2 (optional, max 15)" />
+      <input id="file" type="file" multiple />
+      <button id="uploadBtn">Upload</button>
       <p id="uploadStatus" class="status"></p>
 
       <hr />
@@ -44,11 +39,7 @@
       <h2 id="archiveTitle">Archive</h2>
 
       <div class="archive-section">
-        <input
-          id="search"
-          placeholder="Search in title, description, tags..."
-          oninput="searchMedia()"
-        />
+        <input id="search" placeholder="Search by tag or date (e.g. 2026-05)..." />
       </div>
 
       <div class="archive-section">
@@ -57,7 +48,7 @@
     </div>
 
     <div id="fullscreenOverlay">
-      <div id="fsCloseBtn" onclick="closeFullscreen()">✕</div>
+      <div id="fsCloseBtn">✕</div>
       <div id="fsContainer">
         <img id="fsImage" />
         <video id="fsVideo" controls></video>

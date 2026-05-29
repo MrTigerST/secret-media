@@ -6,4 +6,5 @@
 *.sqlite-shm
 *.db
 keycheck.bin
+vault.json
 node_modules/

@@ -22,7 +22,7 @@ WORKDIR /app
 # Copy installed (already-compiled) node_modules and app source.
 COPY --from=build /app/node_modules ./node_modules
 COPY package.json ./
-COPY server.js db.js encrypt.js init-db.js ./
+COPY server.js db.js encrypt.js metacrypto.js init-db.js ./
 COPY public ./public
 
 # Persistent state lives here (db, encrypted uploads, keycheck.bin).

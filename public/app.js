@@ -1,58 +1,121 @@
-let passcodeHash = null;
+let passcodeHash = null; // PBKDF2-derived key (hex), used as the credential
 let currentPage = 1;
-const perPage = 10;
 
-async function sha256(str) {
-  const enc = new TextEncoder().encode(str);
-  const buf = await crypto.subtle.digest("SHA-256", enc);
-  return Array.from(new Uint8Array(buf))
+const DEFAULT_ITERATIONS = 600000; // PBKDF2-HMAC-SHA256 (OWASP-recommended)
+
+// KDF params for the existing vault, fetched from /api/status.
+let vaultSalt = null;
+let vaultIterations = null;
+
+const $ = (id) => document.getElementById(id);
+
+function hexToBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+  return out;
+}
+function bytesToHex(bytes) {
+  return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
+// JS-driven typewriter: types real characters, independent of element width.
+function typeWriter(el, speed = 45) {
+  if (!el) return;
+  const text = el.dataset.text ?? el.textContent;
+  el.dataset.text = text; // remember original so re-runs work
+  clearInterval(el._tw);
+
+  // Separate text node + persistent caret span (caret stays blinking when done).
+  el.textContent = "";
+  const txt = document.createTextNode("");
+  const caret = document.createElement("span");
+  caret.className = "caret";
+  el.append(txt, caret);
+
+  let i = 0;
+  el._tw = setInterval(() => {
+    txt.textContent = text.slice(0, ++i);
+    if (i >= text.length) clearInterval(el._tw);
+  }, speed);
+}
+
+// Derive the 32-byte AES key from passcode via PBKDF2 in the browser.
+async function deriveKey(passcode, saltHex, iterations) {
+  const enc = new TextEncoder();
+  const baseKey = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(passcode),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: hexToBytes(saltHex), iterations, hash: "SHA-256" },
+    baseKey,
+    256
+  );
+  return bytesToHex(new Uint8Array(bits));
+}
+
 window.addEventListener("DOMContentLoaded", () => {
+  // Wire up event listeners (no inline handlers — strict CSP).
+  $("setBtn").addEventListener("click", setPasscode);
+  $("loginBtn").addEventListener("click", login);
+  $("uploadBtn").addEventListener("click", uploadFile);
+  $("search").addEventListener("input", () => searchMedia());
+  $("fsCloseBtn").addEventListener("click", closeFullscreen);
+
   fetch("/api/status")
     .then((r) => r.json())
     .then((s) => {
+      vaultSalt = s.salt || null;
+      vaultIterations = s.iterations || null;
       if (s.passcodeSet) {
-        document.getElementById("setup").style.display = "none";
+        $("login").style.display = "block";
+        typeWriter($("login").querySelector(".typewriter"));
       } else {
-        document.getElementById("login").style.display = "none";
-        document.getElementById("setup").style.display = "block";
+        $("setup").style.display = "block";
+        typeWriter($("setup").querySelector(".typewriter"));
       }
     })
     .catch(() => {});
 });
 
 async function setPasscode() {
-  const secret = document.getElementById("secretSetup").value.trim();
-  const status = document.getElementById("setupStatus");
+  const secret = $("secretSetup").value.trim();
+  const status = $("setupStatus");
   status.textContent = "";
-
   if (!secret) {
     status.textContent = "Enter a passcode.";
     return;
   }
 
-  const hash = await sha256(secret);
+  // Client generates a random salt; key derived locally, never the passcode.
+  const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const iterations = DEFAULT_ITERATIONS;
+  status.textContent = "Deriving key…";
+  const hash = await deriveKey(secret, salt, iterations);
 
   fetch("/api/set-passcode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code_hash: hash }),
+    body: JSON.stringify({ salt, iterations, code_hash: hash }),
   })
     .then((r) => r.json())
     .then((res) => {
-      if (res.error === "already_set") {
-        status.textContent = "Passcode already set.";
-        document.getElementById("setup").style.display = "none";
-        document.getElementById("login").style.display = "block";
-      } else if (res.success) {
+      if (res.success) {
+        vaultSalt = salt;
+        vaultIterations = iterations;
         status.textContent = "Passcode set! Please log in.";
-        document.getElementById("setup").style.display = "none";
-        document.getElementById("login").style.display = "block";
-      } else if (res.error) {
-        status.textContent = "Error: " + res.error;
+        $("setup").style.display = "none";
+        $("login").style.display = "block";
+        typeWriter($("login").querySelector(".typewriter"));
+      } else {
+        status.textContent = "Error: " + (res.error || "unknown");
       }
     })
     .catch(() => {
@@ -61,17 +124,20 @@ async function setPasscode() {
 }
 
 async function login() {
-  const secret = document.getElementById("secretLogin").value.trim();
-  const status = document.getElementById("loginStatus");
+  const secret = $("secretLogin").value.trim();
+  const status = $("loginStatus");
   status.textContent = "";
-
   if (!secret) {
     status.textContent = "Enter the passcode.";
     return;
   }
+  if (!vaultSalt || !vaultIterations) {
+    status.textContent = "Vault not initialized.";
+    return;
+  }
 
-  const hash = await sha256(secret);
-  passcodeHash = hash;
+  status.textContent = "Deriving key…";
+  passcodeHash = await deriveKey(secret, vaultSalt, vaultIterations);
 
   fetch("/api/auth-check", {
     method: "POST",
@@ -81,39 +147,63 @@ async function login() {
     .then((r) => r.json())
     .then((res) => {
       if (!res.success) {
+        passcodeHash = null;
         status.textContent = "Wrong passcode.";
         return;
       }
-
-      document.getElementById("login").style.display = "none";
-      document.getElementById("app").style.display = "block";
+      status.textContent = "";
+      $("login").style.display = "none";
+      $("app").style.display = "block";
       searchMedia();
+    })
+    .catch(() => {
+      status.textContent = "Network error.";
     });
 }
 
 function uploadFile() {
-  const status = document.getElementById("uploadStatus");
+  const status = $("uploadStatus");
   status.textContent = "";
-
   if (!passcodeHash) {
     status.textContent = "You are not logged in.";
     return;
   }
 
-  const title = document.getElementById("title").value.trim();
-  const fileInput = document.getElementById("file");
-  const file = fileInput.files[0];
+  const title = $("title").value.trim();
+  const description = $("desc").value.trim();
+  const tagsRaw = $("tags").value.trim();
+  const files = $("file").files;
 
-  if (!title || !file) {
-    status.textContent = "Title and file are required.";
+  if (!title) {
+    status.textContent = "Title is required.";
+    return;
+  }
+  if (title.length > 200) {
+    status.textContent = "Title too long (max 200).";
+    return;
+  }
+  if (description.length > 7000) {
+    status.textContent = "Description too long (max 7000).";
+    return;
+  }
+  const tagCount = tagsRaw
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean).length;
+  if (tagCount > 15) {
+    status.textContent = "Too many tags (max 15).";
+    return;
+  }
+  if (files.length > 20) {
+    status.textContent = "Too many files (max 20).";
     return;
   }
 
   const fd = new FormData();
   fd.append("title", title);
-  fd.append("description", document.getElementById("desc").value.trim());
-  fd.append("tags", document.getElementById("tags").value.trim());
-  fd.append("file", file);
+  fd.append("description", description);
+  fd.append("tags", tagsRaw);
+  for (const f of files) fd.append("file", f); // 0..20 files
 
   fetch("/api/upload", {
     method: "POST",
@@ -124,13 +214,13 @@ function uploadFile() {
     .then((res) => {
       if (res.success) {
         status.textContent = "Uploaded!";
-        document.getElementById("title").value = "";
-        document.getElementById("desc").value = "";
-        document.getElementById("tags").value = "";
-        document.getElementById("file").value = "";
+        $("title").value = "";
+        $("desc").value = "";
+        $("tags").value = "";
+        $("file").value = "";
         searchMedia();
-      } else if (res.error) {
-        status.textContent = "Error: " + res.error;
+      } else {
+        status.textContent = "Error: " + (res.error || "unknown");
       }
     })
     .catch(() => {
@@ -138,42 +228,27 @@ function uploadFile() {
     });
 }
 
-function loadMedia(id) {
+function loadMedia(id, el) {
   fetch(`/api/file/${id}`, {
     method: "POST",
     headers: { "x-passcode": passcodeHash },
   })
     .then((r) => r.blob())
     .then((blob) => {
-      const url = URL.createObjectURL(blob);
-
-      const element = document.getElementById(`media-${id}`);
-      element.src = url;
+      el.src = URL.createObjectURL(blob);
     })
-    .catch((err) => {
-      console.error("Error loading media:", err);
-    });
+    .catch((err) => console.error("Error loading media:", err));
 }
 
-function openMedia(id, type) {
-  if (type !== "file") return;
-
+function openMedia(id) {
   fetch(`/api/file/${id}`, {
     method: "POST",
     headers: { "x-passcode": passcodeHash },
   })
-    .then((r) => {
-      if (!r.ok) {
-        console.error("Error opening file");
-        return;
-      }
-      return r.blob();
-    })
+    .then((r) => (r.ok ? r.blob() : null))
     .then((blob) => {
       if (!blob) return;
-
       const url = URL.createObjectURL(blob);
-
       if (
         blob.type.startsWith("text/") ||
         blob.type === "application/pdf" ||
@@ -184,7 +259,6 @@ function openMedia(id, type) {
         window.open(url, "_blank");
         return;
       }
-
       const a = document.createElement("a");
       a.href = url;
       a.download = `file_${id}`;
@@ -192,99 +266,192 @@ function openMedia(id, type) {
       a.click();
       a.remove();
     })
-    .catch((err) => {
-      console.error("Error opening file:", err);
+    .catch((err) => console.error("Error opening file:", err));
+}
+
+// One carousel slide for a file {id, mimetype}.
+function makeSlide(f) {
+  const mt = f.mimetype || "";
+  if (mt.startsWith("image")) {
+    const img = document.createElement("img");
+    img.style.cursor = "zoom-in";
+    img.addEventListener("click", () => openMediaFullscreen(f.id));
+    loadMedia(f.id, img);
+    return img;
+  }
+  if (mt.startsWith("video")) {
+    const v = document.createElement("video");
+    v.controls = true;
+    loadMedia(f.id, v);
+    return v;
+  }
+  if (mt.startsWith("audio")) {
+    const player = document.createElement("div");
+    player.className = "audio-player";
+    const icon = document.createElement("div");
+    icon.className = "audio-icon";
+    icon.textContent = "♪";
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "none";
+    player.append(icon, audio);
+    loadMedia(f.id, audio);
+    return player;
+  }
+  const btn = document.createElement("button");
+  btn.textContent = "Open file";
+  btn.addEventListener("click", () => openMedia(f.id));
+  return btn;
+}
+
+// Carousel with ‹ › arrows; slides built lazily and cached.
+function buildCarousel(files) {
+  const wrap = document.createElement("div");
+  wrap.className = "carousel";
+
+  const stage = document.createElement("div");
+  stage.className = "carousel-stage";
+
+  const cache = new Array(files.length).fill(null);
+  let idx = 0;
+
+  function show(i) {
+    idx = (i + files.length) % files.length;
+    if (!cache[idx]) cache[idx] = makeSlide(files[idx]);
+    stage.replaceChildren(cache[idx]);
+    counter.textContent = `${idx + 1} / ${files.length}`;
+  }
+
+  const nav = document.createElement("div");
+  nav.className = "carousel-nav";
+  const prev = document.createElement("button");
+  prev.className = "carousel-arrow";
+  prev.textContent = "‹";
+  prev.addEventListener("click", () => show(idx - 1));
+  const counter = document.createElement("span");
+  counter.className = "carousel-counter";
+  const next = document.createElement("button");
+  next.className = "carousel-arrow";
+  next.textContent = "›";
+  next.addEventListener("click", () => show(idx + 1));
+  nav.append(prev, counter, next);
+
+  wrap.append(stage, nav);
+  if (files.length <= 1) nav.style.display = "none"; // single file: no arrows
+  show(0);
+  return wrap;
+}
+
+// Build a media item with DOM APIs (textContent) — no innerHTML, no XSS.
+function renderItem(r) {
+  const item = document.createElement("div");
+  item.className = "item";
+
+  const h3 = document.createElement("h3");
+  h3.textContent = r.title;
+  item.appendChild(h3);
+
+  const date = document.createElement("p");
+  date.className = "date";
+  date.textContent = new Date(r.created_at).toLocaleString();
+  item.appendChild(date);
+
+  if (r.description) {
+    const desc = document.createElement("p");
+    desc.textContent = r.description;
+    item.appendChild(desc);
+  }
+
+  if (r.tags && r.tags.length) {
+    const tagWrap = document.createElement("div");
+    tagWrap.className = "tags";
+    r.tags.forEach((name) => {
+      const chip = document.createElement("span");
+      chip.className = "tag";
+      chip.textContent = "#" + name;
+      tagWrap.appendChild(chip);
     });
+    item.appendChild(tagWrap);
+  }
+
+  if (r.files && r.files.length) {
+    item.appendChild(buildCarousel(r.files));
+  }
+
+  const del = document.createElement("button");
+  del.className = "del";
+  del.textContent = "Delete";
+  del.addEventListener("click", () => deleteMedia(r.id));
+  item.appendChild(del);
+
+  return item;
 }
 
 function searchMedia(page = 1) {
   if (!passcodeHash) return;
-
   currentPage = page;
-
-  const q = document.getElementById("search").value || "";
+  const q = $("search").value || "";
 
   fetch(`/api/media?q=${encodeURIComponent(q)}&page=${page}`, {
     headers: { "x-passcode": passcodeHash },
   })
     .then((r) => r.json())
     .then((res) => {
-      const container = document.getElementById("results");
+      const container = $("results");
+      container.replaceChildren();
 
       if (!res.data || res.data.length === 0) {
-        container.innerHTML = "<p>No results.</p>";
+        const p = document.createElement("p");
+        p.textContent = "No results.";
+        container.appendChild(p);
         return;
       }
 
-      const rows = res.data;
-      const totalPages = res.totalPages;
+      res.data.forEach((r) => container.appendChild(renderItem(r)));
 
-      container.innerHTML = rows
-        .map((r) => {
-          const isImage = r.mimetype && r.mimetype.startsWith("image");
-          const isVideoOrAudio =
-            r.mimetype &&
-            (r.mimetype.startsWith("video") || r.mimetype.startsWith("audio"));
+      const pag = document.createElement("div");
+      pag.className = "pagination";
 
-          let mediaHtml = "";
-          if (isImage) {
-            mediaHtml = `<img id="media-${r.id}" style="cursor: zoom-in;" onclick="openMediaFullscreen(${r.id}, 'image')" />`;
-          } else if (isVideoOrAudio) {
-            mediaHtml = `<video id="media-${r.id}" controls></video>`;
-          } else {
-            mediaHtml = `<button onclick="openMedia(${r.id}, 'file')">Open file</button>`;
-          }
+      if (page > 1) {
+        const prev = document.createElement("button");
+        prev.textContent = "‹ Prev";
+        prev.addEventListener("click", () => searchMedia(page - 1));
+        pag.appendChild(prev);
+      }
 
-          loadMedia(r.id);
+      const span = document.createElement("span");
+      span.textContent = `${page} / ${res.totalPages}`;
+      pag.appendChild(span);
 
-          return `
-            <div class="item">
-              <h3>${r.title}</h3>
-              <p class="date">${new Date(r.created_at).toLocaleString()}</p>
-              <p>${r.description || ""}</p>
-              ${mediaHtml}
+      if (page < res.totalPages) {
+        const next = document.createElement("button");
+        next.textContent = "Next ›";
+        next.addEventListener("click", () => searchMedia(page + 1));
+        pag.appendChild(next);
+      }
 
-              <button class="del" onclick="deleteMedia(${r.id})">Delete</button>
-            </div>
-          `;
-        })
-        .join("");
-
-      container.innerHTML += `
-        <div class="pagination">
-          <button ${page <= 1 ? "disabled" : ""} onclick="searchMedia(${
-        page - 1
-      })">‹ Prev</button>
-          <span>${page} / ${totalPages}</span>
-          <button ${
-            page >= totalPages ? "disabled" : ""
-          } onclick="searchMedia(${page + 1})">Next ›</button>
-        </div>
-      `;
+      container.appendChild(pag);
     });
 }
 
 function deleteMedia(id) {
   if (!confirm("Are you sure you want to delete this file?")) return;
-
   fetch(`/api/media/${id}`, {
     method: "DELETE",
     headers: { "x-passcode": passcodeHash },
   })
     .then((r) => r.json())
     .then((res) => {
-      if (res.success) {
-        searchMedia(currentPage);
-      } else {
-        alert("Error: " + res.error);
-      }
+      if (res.success) searchMedia(currentPage);
+      else alert("Error: " + res.error);
     });
 }
 
-let fsOverlay = document.getElementById("fullscreenOverlay");
-let fsContainer = document.getElementById("fsContainer");
-let fsImage = document.getElementById("fsImage");
-let fsVideo = document.getElementById("fsVideo");
+// ---- Fullscreen image viewer (pan + zoom) ----
+const fsOverlay = $("fullscreenOverlay");
+const fsContainer = $("fsContainer");
+const fsImage = $("fsImage");
+const fsVideo = $("fsVideo");
 
 let scale = 1;
 let posX = 0;
@@ -300,17 +467,13 @@ function openMediaFullscreen(id) {
   })
     .then((r) => r.blob())
     .then((blob) => {
-      const url = URL.createObjectURL(blob);
-
       fsOverlay.style.display = "block";
       scale = 1;
       posX = 0;
       posY = 0;
-
-      fsImage.src = url;
+      fsImage.src = URL.createObjectURL(blob);
       fsImage.style.display = "block";
       fsVideo.style.display = "none";
-
       applyTransform();
     });
 }
@@ -320,45 +483,34 @@ function closeFullscreen() {
   fsVideo.pause();
 }
 
-fsContainer.addEventListener("wheel", (e) => {
-  e.preventDefault();
-
-  const delta = e.deltaY > 0 ? -0.1 : 0.1;
-  scale = Math.min(Math.max(scale + delta, 0.2), 5);
-
-  applyTransform();
-});
-
-fsContainer.addEventListener("dragstart", (e) => e.preventDefault());
-
-fsContainer.addEventListener("mousedown", (e) => {
-  isDragging = true;
-  lastX = e.clientX;
-  lastY = e.clientY;
-});
-
-window.addEventListener("mouseup", () => {
-  isDragging = false;
-});
-
-window.addEventListener("mousemove", (e) => {
-  if (!isDragging) return;
-
-  posX += e.clientX - lastX;
-  posY += e.clientY - lastY;
-
-  lastX = e.clientX;
-  lastY = e.clientY;
-
-  applyTransform();
-});
-
 function applyTransform() {
   const t = `translate(calc(-50% + ${posX}px), calc(-50% + ${posY}px)) scale(${scale})`;
   if (fsImage.style.display !== "none") fsImage.style.transform = t;
   if (fsVideo.style.display !== "none") fsVideo.style.transform = t;
 }
 
+fsContainer.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  scale = Math.min(Math.max(scale + (e.deltaY > 0 ? -0.1 : 0.1), 0.2), 5);
+  applyTransform();
+});
+fsContainer.addEventListener("dragstart", (e) => e.preventDefault());
+fsContainer.addEventListener("mousedown", (e) => {
+  isDragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+});
+window.addEventListener("mouseup", () => {
+  isDragging = false;
+});
+window.addEventListener("mousemove", (e) => {
+  if (!isDragging) return;
+  posX += e.clientX - lastX;
+  posY += e.clientY - lastY;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  applyTransform();
+});
 fsOverlay.addEventListener("click", (e) => {
   if (e.target === fsOverlay) closeFullscreen();
 });
