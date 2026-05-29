@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+data
+uploads
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+keycheck.bin
+.git
+.gitignore
+README.md
+start.cmd
+.env*
+Dockerfile
+docker-compose.yml
+.dockerignore

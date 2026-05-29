@@ -1,6 +1,9 @@
 .env*
+/data/
 /uploads/encrypted/**
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.db
 keycheck.bin
 node_modules/
