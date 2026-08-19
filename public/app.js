@@ -1,4 +1,4 @@
-let passcodeHash = null; // PBKDF2-derived key (hex), used as the credential
+let passcodeHash = null; // Browser-derived key (hex), used as the credential
 let currentPage = 1;
 
 const DEFAULT_ITERATIONS = 600000; // PBKDF2-HMAC-SHA256 (OWASP-recommended)
@@ -6,6 +6,7 @@ const DEFAULT_ITERATIONS = 600000; // PBKDF2-HMAC-SHA256 (OWASP-recommended)
 // KDF params for the existing vault, fetched from /api/status.
 let vaultSalt = null;
 let vaultIterations = null;
+let vaultKdf = "PBKDF2-SHA256";
 
 const $ = (id) => document.getElementById(id);
 
@@ -20,6 +21,24 @@ function bytesToHex(bytes) {
   return Array.from(bytes)
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
+}
+
+function cryptoUnavailableMessage() {
+  return "Browser crypto is unavailable. Open this app through http://localhost:3000 or HTTPS.";
+}
+
+function requireBrowserCrypto() {
+  if (!globalThis.crypto || !globalThis.crypto.subtle) {
+    throw new Error("webcrypto_unavailable");
+  }
+  return globalThis.crypto;
+}
+
+async function sha256(passcode) {
+  const cryptoApi = requireBrowserCrypto();
+  const enc = new TextEncoder();
+  const buf = await cryptoApi.subtle.digest("SHA-256", enc.encode(passcode));
+  return bytesToHex(new Uint8Array(buf));
 }
 
 // JS-driven typewriter: types real characters, independent of element width.
@@ -45,15 +64,16 @@ function typeWriter(el, speed = 45) {
 
 // Derive the 32-byte AES key from passcode via PBKDF2 in the browser.
 async function deriveKey(passcode, saltHex, iterations) {
+  const cryptoApi = requireBrowserCrypto();
   const enc = new TextEncoder();
-  const baseKey = await crypto.subtle.importKey(
+  const baseKey = await cryptoApi.subtle.importKey(
     "raw",
     enc.encode(passcode),
     "PBKDF2",
     false,
     ["deriveBits"]
   );
-  const bits = await crypto.subtle.deriveBits(
+  const bits = await cryptoApi.subtle.deriveBits(
     { name: "PBKDF2", salt: hexToBytes(saltHex), iterations, hash: "SHA-256" },
     baseKey,
     256
@@ -61,10 +81,22 @@ async function deriveKey(passcode, saltHex, iterations) {
   return bytesToHex(new Uint8Array(bits));
 }
 
+async function deriveCredential(passcode) {
+  if (vaultKdf === "SHA-256") return sha256(passcode);
+  if (!vaultSalt || !vaultIterations) throw new Error("missing_kdf_params");
+  return deriveKey(passcode, vaultSalt, vaultIterations);
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   // Wire up event listeners (no inline handlers — strict CSP).
-  $("setBtn").addEventListener("click", setPasscode);
-  $("loginBtn").addEventListener("click", login);
+  $("setupForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    setPasscode();
+  });
+  $("loginForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    login();
+  });
   $("uploadBtn").addEventListener("click", uploadFile);
   $("search").addEventListener("input", () => searchMedia());
   $("fsCloseBtn").addEventListener("click", closeFullscreen);
@@ -74,6 +106,7 @@ window.addEventListener("DOMContentLoaded", () => {
     .then((s) => {
       vaultSalt = s.salt || null;
       vaultIterations = s.iterations || null;
+      vaultKdf = s.kdf || (s.passcodeSet && !s.salt ? "SHA-256" : "PBKDF2-SHA256");
       if (s.passcodeSet) {
         $("login").style.display = "block";
         typeWriter($("login").querySelector(".typewriter"));
@@ -95,11 +128,19 @@ async function setPasscode() {
   }
 
   // Client generates a random salt; key derived locally, never the passcode.
-  const salt = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+  let salt;
+  let hash;
   const iterations = DEFAULT_ITERATIONS;
-  status.textContent = "Deriving key…";
-  const hash = await deriveKey(secret, salt, iterations);
-
+  try {
+    const cryptoApi = requireBrowserCrypto();
+    salt = bytesToHex(cryptoApi.getRandomValues(new Uint8Array(16)));
+    status.textContent = "Deriving key...";
+    hash = await deriveKey(secret, salt, iterations);
+    vaultKdf = "PBKDF2-SHA256";
+  } catch (e) {
+    status.textContent = cryptoUnavailableMessage();
+    return;
+  }
   fetch("/api/set-passcode", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -131,13 +172,22 @@ async function login() {
     status.textContent = "Enter the passcode.";
     return;
   }
-  if (!vaultSalt || !vaultIterations) {
+  if (vaultKdf === "PBKDF2-SHA256" && (!vaultSalt || !vaultIterations)) {
     status.textContent = "Vault not initialized.";
     return;
   }
 
-  status.textContent = "Deriving key…";
-  passcodeHash = await deriveKey(secret, vaultSalt, vaultIterations);
+  status.textContent = "Deriving key...";
+  try {
+    passcodeHash = await deriveCredential(secret);
+  } catch (e) {
+    passcodeHash = null;
+    status.textContent =
+      e.message === "missing_kdf_params"
+        ? "Vault KDF parameters are missing."
+        : cryptoUnavailableMessage();
+    return;
+  }
 
   fetch("/api/auth-check", {
     method: "POST",

@@ -7,7 +7,14 @@ const crypto = require("crypto");
 const { pipeline } = require("stream");
 const { encryptBuffer, decryptBuffer } = require("./encrypt");
 const { encField, decField, tokenize, NGRAM } = require("./metacrypto");
-const { DATA_DIR, stmts, createMedia, candidateIds, db } = require("./db");
+const {
+  DATA_DIR,
+  stmts,
+  createMedia,
+  candidateIds,
+  db,
+  migrateLegacyMetadata,
+} = require("./db");
 
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD_MB = parseInt(process.env.MAX_UPLOAD_MB || "100", 10);
@@ -22,6 +29,7 @@ const KDF_MAX_ITER = 10000000;
 
 const uploadsDir = path.join(DATA_DIR, "uploads", "encrypted");
 const vaultPath = path.join(DATA_DIR, "vault.json");
+const legacyKeycheckPath = path.join(DATA_DIR, "keycheck.bin");
 fs.mkdirSync(uploadsDir, { recursive: true });
 
 const app = express();
@@ -42,6 +50,7 @@ app.use((req, res, next) => {
   res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
   next();
 });
+app.get("/favicon.ico", (req, res) => res.status(204).end());
 
 // ---- In-memory rate limiter (per IP, sliding window). No dependency. ----
 const hits = new Map();
@@ -71,9 +80,17 @@ const authLimit = rateLimit(10, 60000); // 10 attempts / minute / IP
 let vaultCache;
 function loadVault() {
   if (vaultCache === undefined) {
-    vaultCache = fs.existsSync(vaultPath)
-      ? JSON.parse(fs.readFileSync(vaultPath, "utf8"))
-      : null;
+    if (fs.existsSync(vaultPath)) {
+      vaultCache = JSON.parse(fs.readFileSync(vaultPath, "utf8"));
+    } else if (fs.existsSync(legacyKeycheckPath)) {
+      vaultCache = {
+        kdf: "SHA-256",
+        legacy: true,
+        keycheck: fs.readFileSync(legacyKeycheckPath).toString("hex"),
+      };
+    } else {
+      vaultCache = null;
+    }
   }
   return vaultCache;
 }
@@ -102,11 +119,27 @@ function verifyKey(hexHash) {
   }
 }
 
+let legacyMetadataMigrated = false;
+function migrateLegacyDataOnce(key) {
+  if (legacyMetadataMigrated) return;
+  const result = migrateLegacyMetadata(key);
+  legacyMetadataMigrated = true;
+  if (result.migrated > 0) {
+    console.log(`Migrated ${result.migrated} legacy media metadata row(s).`);
+  }
+}
+
 function auth(req, res, next) {
   const key = verifyKey(req.headers["x-passcode"]);
   if (!key) return res.status(401).json({ error: "invalid_passcode" });
   req.aesKey = key;
-  next();
+  try {
+    migrateLegacyDataOnce(key);
+    next();
+  } catch (e) {
+    console.error("Legacy migration error:", e);
+    res.status(500).json({ error: "migration_failed" });
+  }
 }
 
 // ---- Streaming multer storage: file -> AES-GCM cipher -> disk. ----
@@ -143,11 +176,16 @@ const uploadMw = multer({
 // ---- Routes ----
 app.get("/api/status", (req, res) => {
   const vault = loadVault();
-  res.json(
-    vault
-      ? { passcodeSet: true, salt: vault.salt, iterations: vault.iterations }
-      : { passcodeSet: false }
-  );
+  if (!vault) return res.json({ passcodeSet: false });
+  if (vault.kdf === "PBKDF2-SHA256") {
+    return res.json({
+      passcodeSet: true,
+      kdf: vault.kdf,
+      salt: vault.salt,
+      iterations: vault.iterations,
+    });
+  }
+  res.json({ passcodeSet: true, kdf: "SHA-256", legacy: true });
 });
 
 app.post("/api/set-passcode", authLimit, (req, res) => {
@@ -180,6 +218,12 @@ app.post("/api/auth-check", authLimit, (req, res) => {
   if (!loadVault()) return res.status(400).json({ error: "no_key_set" });
   if (!verifyKey(code_hash)) {
     return res.status(401).json({ error: "invalid_passcode" });
+  }
+  try {
+    migrateLegacyDataOnce(Buffer.from(code_hash, "hex"));
+  } catch (e) {
+    console.error("Legacy migration error:", e);
+    return res.status(500).json({ error: "migration_failed" });
   }
   res.json({ success: true });
 });

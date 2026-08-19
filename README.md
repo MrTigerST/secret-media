@@ -37,6 +37,8 @@ Open http://localhost:3000 and set a passcode on first launch.
 
 All persistent state (SQLite DB, encrypted uploads, `vault.json`) lives in the `secret-media-data` named volume mounted at `/data`, so it survives container restarts and rebuilds.
 
+Older Docker volumes that still use `keycheck.bin` and the legacy plaintext metadata schema are detected automatically. After the first successful login, legacy title/description/tags are encrypted into the current schema and the old plaintext metadata fields are cleared.
+
 ### Configuration (env vars)
 
 | Variable        | Default | Description                          |
@@ -60,7 +62,7 @@ docker compose down -v         # stop and delete the data volume
 
 ## Run locally (without Docker)
 
-Requires Node.js >= 18.
+Requires Node.js >= 22.
 
 ```bash
 npm install

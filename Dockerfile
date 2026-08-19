@@ -1,5 +1,5 @@
 # ---- Build stage: compile native deps (better-sqlite3) ----
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 
 # Toolchain needed to build better-sqlite3 native bindings.
 RUN apk add --no-cache python3 make g++
@@ -11,7 +11,7 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev --build-from-source
 
 # ---- Runtime stage: small image, no toolchain ----
-FROM node:20-alpine AS runtime
+FROM node:22-alpine AS runtime
 
 ENV NODE_ENV=production \
     PORT=3000 \

@@ -12,16 +12,32 @@
       <p>
         This unique passcode encrypts all your files. Remember it — it cannot be recovered.
       </p>
-      <input id="secretSetup" type="password" placeholder="New secret passcode" />
-      <button id="setBtn">Set passcode</button>
+      <form id="setupForm" autocomplete="off">
+        <input
+          id="secretSetup"
+          type="password"
+          placeholder="New secret passcode"
+          autocomplete="new-password"
+          required
+        />
+        <button id="setBtn" type="submit">Set passcode</button>
+      </form>
       <p id="setupStatus" class="status"></p>
     </div>
 
     <div class="card" id="login" style="display: none">
       <h2>Login</h2>
       <p class="typewriter">Enter the secret passcode to access the media.</p>
-      <input id="secretLogin" type="password" placeholder="Passcode" />
-      <button id="loginBtn">Enter</button>
+      <form id="loginForm" autocomplete="off">
+        <input
+          id="secretLogin"
+          type="password"
+          placeholder="Passcode"
+          autocomplete="current-password"
+          required
+        />
+        <button id="loginBtn" type="submit">Enter</button>
+      </form>
       <p id="loginStatus" class="status"></p>
     </div>
 
